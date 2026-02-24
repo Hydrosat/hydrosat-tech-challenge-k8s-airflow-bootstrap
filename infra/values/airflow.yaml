@@ -1,0 +1,25 @@
+dags:
+  persistence:
+    enabled: true
+    existingClaim: airflow-dags
+    accessMode: ReadWriteMany
+
+airflow:
+  config:
+    AIRFLOW__CORE__HOSTNAME_CALLABLE: airflow.utils.net.get_host_ip_address
+    AIRFLOW__LOGGING__ENABLE_TASK_LOG_SERVER: "False"
+
+workers:
+  env:
+    - name: AIRFLOW__CORE__HOSTNAME_CALLABLE
+      value: airflow.utils.net.get_host_ip_address
+    - name: AIRFLOW__LOGGING__ENABLE_TASK_LOG_SERVER
+      value: "False"
+
+createUserJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+
+migrateDatabaseJob:
+  useHelmHooks: false
+  applyCustomEnv: false

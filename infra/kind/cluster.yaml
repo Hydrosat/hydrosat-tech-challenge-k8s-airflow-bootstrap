@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ${KIND_CLUSTER_NAME}
+nodes:
+  - role: control-plane
+    extraMounts:
+      # Mount local DAGs directory into the kind node so the hostPath PV can read it.
+      # PROJECT_ROOT and KIND_CLUSTER_NAME are injected by the Makefile.
+      - hostPath: ${PROJECT_ROOT}/dags
+        containerPath: /mnt/airflow-dags

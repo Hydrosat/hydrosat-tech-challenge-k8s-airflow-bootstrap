@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags
+  namespace: airflow
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: airflow-dags
+  resources:
+    requests:
+      storage: 1Gi
