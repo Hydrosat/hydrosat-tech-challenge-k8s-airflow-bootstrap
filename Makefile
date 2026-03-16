@@ -3,23 +3,33 @@ SHELL := bash
 
 KIND_CLUSTER_KUBERNETES_VERSION ?= 1.34.3
 KIND_CONFIG ?= infra/kind/cluster.yaml
-KIND_CLUSTER_NAME ?= airflow-local
+KIND_CLUSTER_NAME ?= airflow-local-copilot
 AIRFLOW_NAMESPACE ?= airflow
 AIRFLOW_RELEASE ?= airflow
 AIRFLOW_HELM_VERSION ?= 1.19.0
 AIRFLOW_VALUES ?= infra/values/airflow.yaml
 AIRFLOW_HELM_TIMEOUT ?= 10m
+AIRFLOW_WEB_BASE_PORT ?= 8180
+MINIO_API_PORT ?= 9100
+MINIO_CONSOLE_PORT ?= 9101
+PIPELINE_IMAGE ?= hydrosat-pipeline-copilot:latest
 
-.PHONY: help init reset dev kind-create kind-delete airflow-repo airflow-namespace airflow-dags-volume airflow-install airflow-uninstall airflow-clean status metrics-install admin-rbac admin-token destroy
+.PHONY: help init reset dev kind-create kind-delete airflow-repo airflow-namespace airflow-dags-volume airflow-install airflow-uninstall airflow-clean status metrics-install admin-rbac admin-token destroy docker-build docker-load minio-install minio-port-forward kpo-rbac pipeline-config
 
 help:
 	@printf "Available targets:\n"
-	@printf "  init               Create kind cluster and install Airflow\n"
+	@printf "  init               Create kind cluster and install everything\n"
 	@printf "  reset              Reinstall Airflow in the existing cluster\n"
 	@printf "  destroy            Delete kind cluster (including Airflow)\n"
-	@printf "  dev                Port-forward Airflow UI to first free local port from 8080\n"
+	@printf "  dev                Port-forward Airflow UI (default: localhost:%s)\n" "$(AIRFLOW_WEB_BASE_PORT)"
 	@printf "  kind-create        Create the kind cluster\n"
 	@printf "  kind-delete        Delete the kind cluster\n"
+	@printf "  docker-build       Build the hydrosat-pipeline-copilot Docker image\n"
+	@printf "  docker-load        Load the pipeline image into kind\n"
+	@printf "  minio-install      Deploy MinIO + init bucket in the cluster\n"
+	@printf "  minio-port-forward Port-forward MinIO console (%s) and API (%s)\n" "$(MINIO_CONSOLE_PORT)" "$(MINIO_API_PORT)"
+	@printf "  kpo-rbac           Apply RBAC for KubernetesPodOperator\n"
+	@printf "  pipeline-config    Render pipeline_config.yaml from template\n"
 	@printf "  airflow-install    Install/upgrade Airflow via Helm\n"
 	@printf "  airflow-uninstall  Uninstall Airflow\n"
 	@printf "  metrics-install    Install metrics-server for cluster metrics\n"
@@ -27,12 +37,13 @@ help:
 	@printf "  admin-token        Print a token for the local admin service account\n"
 	@printf "  status             Show Airflow pods and services\n"
 
-init: kind-create metrics-install airflow-namespace airflow-dags-volume airflow-install admin-rbac
+init: kind-create metrics-install airflow-namespace airflow-dags-volume docker-build docker-load pipeline-config minio-install kpo-rbac airflow-install admin-rbac
 
 reset: airflow-uninstall airflow-clean airflow-install
 
 dev:
-	@AIRFLOW_WEB_PORT="$$(infra/scripts/airflow_ports.sh)"; \
+	@AIRFLOW_WEB_BASE_PORT="$(AIRFLOW_WEB_BASE_PORT)" \
+	AIRFLOW_WEB_PORT="$$(infra/scripts/airflow_ports.sh)"; \
 	if kubectl -n $(AIRFLOW_NAMESPACE) get svc $(AIRFLOW_RELEASE)-api-server >/dev/null 2>&1; then \
 		SVC="$(AIRFLOW_RELEASE)-api-server"; \
 	elif kubectl -n $(AIRFLOW_NAMESPACE) get svc $(AIRFLOW_RELEASE)-webserver >/dev/null 2>&1; then \
@@ -142,3 +153,46 @@ destroy:
 	else \
 		echo "kind cluster '$(KIND_CLUSTER_NAME)' not found; nothing to delete."; \
 	fi
+
+# ── Pipeline config ──────────────────────────────────────────────────────────
+# Renders dags/config/pipeline_config.yaml from the .tpl template, injecting
+# the current MINIO_API_PORT so scripts connect to the right Service port.
+pipeline-config:
+	@echo "Rendering dags/config/pipeline_config.yaml (MINIO_API_PORT=$(MINIO_API_PORT)) …"
+	@sed -e 's|$${MINIO_API_PORT}|$(MINIO_API_PORT)|g' \
+	    dags/config/pipeline_config.yaml.tpl > dags/config/pipeline_config.yaml
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+docker-build:
+	@echo "Building $(PIPELINE_IMAGE) …"
+	@docker build -t $(PIPELINE_IMAGE) docker/
+
+docker-load:
+	@echo "Loading $(PIPELINE_IMAGE) into kind cluster '$(KIND_CLUSTER_NAME)' …"
+	@kind load docker-image $(PIPELINE_IMAGE) --name $(KIND_CLUSTER_NAME)
+
+# ── MinIO ────────────────────────────────────────────────────────────────────
+minio-install:
+	@echo "Deploying MinIO (API=$(MINIO_API_PORT), Console=$(MINIO_CONSOLE_PORT)) …"
+	@tmpfile="$$(mktemp)"; \
+	sed -e 's|$${MINIO_API_PORT}|$(MINIO_API_PORT)|g' \
+	    -e 's|$${MINIO_CONSOLE_PORT}|$(MINIO_CONSOLE_PORT)|g' \
+	    -e 's|$${PIPELINE_IMAGE}|$(PIPELINE_IMAGE)|g' \
+	    infra/helm/minio.yaml > "$$tmpfile"; \
+	kubectl apply -f "$$tmpfile"; \
+	rm -f "$$tmpfile"
+	@echo "Waiting for MinIO pod to be ready …"
+	@kubectl -n $(AIRFLOW_NAMESPACE) wait --for=condition=ready pod -l app=minio --timeout=120s
+	@echo "Waiting for bucket-init job to complete …"
+	@kubectl -n $(AIRFLOW_NAMESPACE) wait --for=condition=complete job/minio-bucket-init --timeout=120s
+	@echo "MinIO is ready ✓"
+
+minio-port-forward:
+	@echo "MinIO API  → http://localhost:$(MINIO_API_PORT)"
+	@echo "MinIO Web  → http://localhost:$(MINIO_CONSOLE_PORT)  (login: minioadmin / minioadmin)"
+	@kubectl -n $(AIRFLOW_NAMESPACE) port-forward svc/minio $(MINIO_API_PORT):$(MINIO_API_PORT) $(MINIO_CONSOLE_PORT):$(MINIO_CONSOLE_PORT)
+
+# ── RBAC for KubernetesPodOperator ───────────────────────────────────────────
+kpo-rbac:
+	@kubectl apply -f infra/helm/kpo-rbac.yaml
+

@@ -1,0 +1,4 @@
+# Directories that Airflow should not scan for DAGs
+scripts
+config
+

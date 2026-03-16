@@ -4,3 +4,7 @@ Thumbs.db
 .idea/
 __pycache__/
 *.py[cod]
+
+# Generated from .tpl by `make pipeline-config`
+dags/config/pipeline_config.yaml
+

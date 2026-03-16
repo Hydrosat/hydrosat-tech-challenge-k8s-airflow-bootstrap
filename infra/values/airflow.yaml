@@ -1,21 +1,28 @@
+# =============================================================================
+# Airflow Helm values – Hydrosat Pipeline
+# =============================================================================
+#
+# LocalExecutor keeps the stack lightweight (no Celery workers, no Redis).
+# Heavy processing is delegated to KubernetesPodOperator pods, which satisfies
+# the "tasks must execute in k8s pods" requirement.
+# =============================================================================
+
+executor: LocalExecutor
+
+# ── DAG persistence (host-path PVC mounted from the kind node) ───────────────
 dags:
   persistence:
     enabled: true
     existingClaim: airflow-dags
     accessMode: ReadWriteMany
 
+# ── Core Airflow config overrides ────────────────────────────────────────────
 airflow:
   config:
     AIRFLOW__CORE__HOSTNAME_CALLABLE: airflow.utils.net.get_host_ip_address
     AIRFLOW__LOGGING__ENABLE_TASK_LOG_SERVER: "False"
 
-workers:
-  env:
-    - name: AIRFLOW__CORE__HOSTNAME_CALLABLE
-      value: airflow.utils.net.get_host_ip_address
-    - name: AIRFLOW__LOGGING__ENABLE_TASK_LOG_SERVER
-      value: "False"
-
+# ── Helm hook settings ──────────────────────────────────────────────────────
 createUserJob:
   useHelmHooks: false
   applyCustomEnv: false

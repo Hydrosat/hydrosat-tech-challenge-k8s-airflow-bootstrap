@@ -1,0 +1,118 @@
+---
+# ── MinIO Deployment ─────────────────────────────────────────────────────────
+# The container always listens on its default ports (9000 API, 9001 console).
+# The Service exposes them on ${MINIO_API_PORT} / ${MINIO_CONSOLE_PORT},
+# substituted by the Makefile at apply time (same pattern as cluster.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: airflow
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+# ── MinIO Service ────────────────────────────────────────────────────────────
+# port  = what clients connect to (configurable via Makefile variables)
+# targetPort = container's fixed internal port
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: airflow
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: ${MINIO_API_PORT}
+      targetPort: 9000
+    - name: console
+      port: ${MINIO_CONSOLE_PORT}
+      targetPort: 9001
+---
+# ── Init Job: create the pipeline bucket ─────────────────────────────────────
+# Uses the hydrosat-pipeline-copilot image (already loaded into kind) with boto3 to
+# create the bucket, avoiding external image pull issues.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket-init
+  namespace: airflow
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-minio
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for MinIO to become ready..."
+              until wget -qO- http://minio:${MINIO_API_PORT}/minio/health/ready >/dev/null 2>&1; do
+                sleep 2
+              done
+              echo "MinIO is ready."
+      containers:
+        - name: create-bucket
+          image: ${PIPELINE_IMAGE}
+          imagePullPolicy: Never
+          command:
+            - python
+            - -c
+            - |
+              import boto3
+              from botocore.exceptions import ClientError
+              s3 = boto3.client(
+                  "s3",
+                  endpoint_url="http://minio:${MINIO_API_PORT}",
+                  aws_access_key_id="minioadmin",
+                  aws_secret_access_key="minioadmin",
+                  region_name="us-east-1",
+              )
+              try:
+                  s3.head_bucket(Bucket="hydrosat-pipeline-copilot")
+                  print("Bucket 'hydrosat-pipeline-copilot' already exists.")
+              except ClientError:
+                  s3.create_bucket(Bucket="hydrosat-pipeline-copilot")
+                  print("Bucket 'hydrosat-pipeline-copilot' created.")
+              print("Done.")
+

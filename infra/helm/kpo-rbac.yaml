@@ -1,0 +1,31 @@
+---
+# RBAC so that every ServiceAccount in the airflow namespace can manage pods.
+# Required for KubernetesPodOperator tasks launched by the Airflow scheduler.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-operator
+  namespace: airflow
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-pod-operator
+  namespace: airflow
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pod-operator
+subjects:
+  # Bind to every SA in the airflow namespace
+  - kind: Group
+    name: system:serviceaccounts:airflow
+    apiGroup: rbac.authorization.k8s.io
+
