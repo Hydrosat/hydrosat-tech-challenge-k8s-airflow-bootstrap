@@ -21,6 +21,12 @@ airflow:
   config:
     AIRFLOW__CORE__HOSTNAME_CALLABLE: airflow.utils.net.get_host_ip_address
     AIRFLOW__LOGGING__ENABLE_TASK_LOG_SERVER: "False"
+    AIRFLOW__API__EXPOSE_CONFIG: "True"
+
+apiServer:
+  env:
+    - name: AIRFLOW__API__EXPOSE_CONFIG
+      value: "True"
 
 # ── Helm hook settings ──────────────────────────────────────────────────────
 createUserJob:
