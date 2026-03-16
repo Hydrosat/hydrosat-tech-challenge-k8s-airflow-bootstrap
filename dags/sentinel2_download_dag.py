@@ -55,7 +55,7 @@ def sentinel2_download() -> None:
         arguments=["--date", "{{ ds }}", "--config", CONFIG_PATH],
         volumes=[DAGS_VOLUME],
         volume_mounts=[DAGS_MOUNT],
-        is_delete_operator_pod=False,
+        on_finish_action="keep_pod",
         get_logs=True,
         log_events_on_failure=True,
         startup_timeout_seconds=300,
